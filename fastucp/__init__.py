@@ -1,7 +1,6 @@
-from .core import FastUCP
-from .builders import CheckoutBuilder
-from .client import FastUCPClient
-from .exceptions import UCPException
+from fastucp.builders import CheckoutBuilder
+from fastucp.client import FastUCPClient
+from fastucp.core import FastUCP
+from fastucp.exceptions import UCPError
 
-__version__ = "0.1.2"
-__all__ = ["FastUCP", "CheckoutBuilder", "FastUCPClient", "UCPException"]
+__all__ = ["FastUCP", "CheckoutBuilder", "FastUCPClient", "UCPError"]

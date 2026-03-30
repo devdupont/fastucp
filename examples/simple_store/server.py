@@ -1,26 +1,30 @@
+import logging
+import uuid
+from typing import Any
 
 import uvicorn
-import uuid
-from typing import List, Dict, Any
-from fastucp import FastUCP, CheckoutBuilder
+from ucp_sdk.models.schemas.shopping.types.order_line_item import OrderLineItem, Quantity
 
+from fastucp import CheckoutBuilder, FastUCP
 from fastucp.types import (
-    CheckoutCreateRequest, 
+    CheckoutCreateRequest,
     CheckoutUpdateRequest,
-    Order, 
-    Fulfillment, 
-    TotalResponse,
-    ResponseOrder,
+    Fulfillment,
+    Order,
     Response,
-    Version
+    ResponseOrder,
+    Version,
 )
-from fastucp.models.schemas.shopping.types.order_line_item import OrderLineItem, Quantity
 
 # Import handling
 try:
-    from .inventory import PRODUCTS
+    from fastucp.inventory import PRODUCTS
 except ImportError:
     from inventory import PRODUCTS
+
+
+logging.basicConfig(level=logging.INFO)
+
 
 app = FastUCP(
     title="FastUCP Tech Store",
@@ -30,7 +34,7 @@ app = FastUCP(
 )
 
 # --- SIMPLE DATABASE SIMULATION ---
-SESSIONS = {} 
+SESSIONS = {}
 
 # --- 1. Discovery ---
 @app.discovery("/products/search")
@@ -53,9 +57,9 @@ def search_products(query: str = ""):
 def create_session(payload: CheckoutCreateRequest):
     # Generate a new Session ID
     session_id = str(uuid.uuid4())
-    
+
     builder = CheckoutBuilder(app, session_id=session_id)
-    
+
     # Mandatory Links
     builder.links = [
         {"type": "privacy_policy", "url": "https://example.com/privacy"},
@@ -73,16 +77,16 @@ def create_session(payload: CheckoutCreateRequest):
                 quantity=req_item.quantity,
                 img_url=product["image_url"]
             )
-    
+
     if payload.buyer:
         builder.set_buyer(payload.buyer)
 
     response = builder.build()
-    
+
     # Save Session (Needed during Complete phase)
     SESSIONS[session_id] = response
     print(f"💾 Session Created: {session_id}")
-    
+
     return response
 
 # --- 3. Update Checkout ---
@@ -99,7 +103,7 @@ def update_session(id: str, payload: CheckoutUpdateRequest):
         {"type": "privacy_policy", "url": "https://example.com/privacy"},
         {"type": "terms_of_service", "url": "https://example.com/terms"}
     ]
-    
+
     builder.set_buyer(payload.buyer)
 
     # Shipping Logic
@@ -115,7 +119,7 @@ def update_session(id: str, payload: CheckoutUpdateRequest):
 
 
 @app.complete_checkout("/checkout-sessions/{id}/complete")
-def complete_session(id: str, payment: Dict[str, Any]):
+def complete_session(id: str, payment: dict[str, Any]):
     """
     Finalizes the order and returns an Order object.
     """
@@ -124,7 +128,7 @@ def complete_session(id: str, payment: Dict[str, Any]):
     # 1. Session Check
     checkout_session = SESSIONS.get(id)
     if not checkout_session:
-        # Error can be raised (using UCPException)
+        # Error can be raised (using UCPError)
         return {"error": "Session not found"}
 
     # 2. Payment Verification (Mock)
@@ -132,7 +136,7 @@ def complete_session(id: str, payment: Dict[str, Any]):
     if not payment.get("token"):
         pass
 
-    
+
     order_line_items = []
     for li in checkout_session.line_items:
         order_line_items.append(
@@ -147,7 +151,7 @@ def complete_session(id: str, payment: Dict[str, Any]):
 
     # 4. Create Order Object
     order_id = f"ord_{uuid.uuid4().hex[:8]}"
-    
+
     # Creating UCP Context (Capabilities)
     ucp_context = ResponseOrder(
         version=Version(root="2026-01-11"),
@@ -163,7 +167,7 @@ def complete_session(id: str, payment: Dict[str, Any]):
         checkout_id=id,
         permalink_url=f"https://example.com/orders/{order_id}",
         line_items=order_line_items,
-        totals=checkout_session.totals, 
+        totals=checkout_session.totals,
         fulfillment=Fulfillment(
             expectations=[], # Fulfillment expectations can be added here
             events=[]

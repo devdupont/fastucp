@@ -1,36 +1,104 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "fastucp-python"
-version = "0.1.2"
+dynamic = ["version"]
 description = "FastAPI based implementation of Universal Commerce Protocol"
-authors = [
-  { name="Mehmet Hilmi Emel", email="mehmethilmi81@gmail.com" },
-]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = "<4.0,>=3.10"
+license = "MIT"
+authors = [
+    { name="Mehmet Hilmi Emel", email="mehmethilmi81@gmail.com" },
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Framework :: FastAPI",
 ]
-
 dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "pydantic>=2.5.0",      
     "requests>=2.30.0",
-    "jwcrypto==1.5.6"
+    "jwcrypto==1.5.6",
+    "ucp-sdk==0.1.0",
 ]
 
 [project.urls]
 "Homepage" = "https://github.com/MehmetHilmiEmel/fastucp"
 "Bug Tracker" = "https://github.com/MehmetHilmiEmel/fastucp/issues"
 
-[tool.setuptools.packages.find]
-where = ["."]  
-include = ["fastucp*"] 
-exclude = ["example*", "tests*", "docs*","all_project_codes.txt","export_code.py", "venv"]  
+[tool.hatch.version]
+path = "fastucp/__about__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fastucp"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.envs.types]
+extra-dependencies = [
+    "mypy>=1.0.0",
+]
+
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:fastucp}"
+
+[tool.hatch.envs.api.scripts]
+start = "uvicorn fastucp.main:app --port {args:8080}"
+reload = "uvicorn fastucp.main:app --reload --port {args:8080}"
+
+[tool.hatch.envs.hatch-test]
+extra-dependencies = [
+    "httpx",
+    "pytest-asyncio",
+    "pytest-cov",
+]
+
+[tool.pytest.ini_options]
+addopts = """\
+    --cov fastucp \
+    --cov tests \
+    --cov-report term-missing \
+    --no-cov-on-fail \
+"""
+asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests (require external services)",
+    "unit: marks tests as pure unit tests (no external dependencies)",
+    "slow: marks tests as slow running (deselect with '-m \"not slow\"')",
+]
+
+[tool.coverage.run]
+source_pkgs = ["fastucp", "tests"]
+branch = true
+parallel = true
+
+[tool.coverage.report]
+# fail_under = 50
+exclude_lines = [
+    "no cov",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.mypy]
+disallow_any_unimported = false
+disallow_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+check_untyped_defs = true
+show_error_codes = true
+
+[tool.ruff]
+lint.ignore = [
+    "B008", # Depends in func def
+    "E501", # Line too long. Let the formatter handle
+]

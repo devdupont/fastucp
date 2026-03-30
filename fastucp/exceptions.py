@@ -1,15 +1,15 @@
 # fastucp/exceptions.py
-from typing import Optional, Literal
+from typing import Literal
 
-class UCPException(Exception):
 
+class UCPError(Exception):
     def __init__(
-        self, 
-        code: str, 
-        message: str, 
-        path: Optional[str] = None, 
+        self,
+        code: str,
+        message: str,
+        path: str | None = None,
         severity: Literal["recoverable", "requires_buyer_input", "requires_buyer_review"] = "requires_buyer_input",
-        status_code: int = 400
+        status_code: int = 400,
     ):
         self.code = code
         self.message = message
