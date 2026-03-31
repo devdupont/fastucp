@@ -1,4 +1,5 @@
 from pydantic import AnyUrl
+from pydantic.networks import HttpUrl, UrlConstraints
 from ucp_sdk.models._internal import Response, ResponseCheckout, ResponseOrder, Version
 from ucp_sdk.models.discovery.profile_schema import UcpDiscoveryProfile
 from ucp_sdk.models.schemas.shopping.checkout_create_req import CheckoutCreateRequest
@@ -21,6 +22,13 @@ from ucp_sdk.models.schemas.shopping.types.message_error import MessageError
 from ucp_sdk.models.schemas.shopping.types.payment_handler_resp import PaymentHandlerResponse
 from ucp_sdk.models.schemas.shopping.types.payment_instrument import PaymentInstrument
 from ucp_sdk.models.schemas.shopping.types.total_resp import TotalResponse
+
+
+class HttpsUrl(HttpUrl):
+    """Validate https URL strings."""
+
+    _constraints = UrlConstraints(max_length=2083, allowed_schemes=["https"])
+
 
 __all__ = [
     "CheckoutCreateRequest",
@@ -47,6 +55,7 @@ __all__ = [
     "PaymentHandlerResponse",
     "Buyer",
     "AnyUrl",
+    "HttpsUrl",
     "Version",
     "Response",
     "ResponseCheckout",

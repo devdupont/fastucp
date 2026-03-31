@@ -1,3 +1,7 @@
+"""A simple FastUCP server simulating a tech store checkout flow. This example demonstrates the discovery, checkout creation, update, and completion phases of the UCP protocol."""
+
+# ruff: noqa: INP001, T201, BLE001
+
 import logging
 import uuid
 from typing import Any
@@ -6,55 +10,70 @@ import uvicorn
 from ucp_sdk.models.schemas.shopping.types.order_line_item import OrderLineItem, Quantity
 
 from fastucp import CheckoutBuilder, FastUCP
+from fastucp.exceptions import UCPError
+from fastucp.presets import Capability
 from fastucp.types import (
     CheckoutCreateRequest,
+    CheckoutResponse,
     CheckoutUpdateRequest,
     Fulfillment,
+    HttpsUrl,
     Order,
-    Response,
     ResponseOrder,
-    Version,
 )
-
-# Import handling
-try:
-    from fastucp.inventory import PRODUCTS
-except ImportError:
-    from inventory import PRODUCTS
-
 
 logging.basicConfig(level=logging.INFO)
 
 
-app = FastUCP(
-    title="FastUCP Tech Store",
-    base_url="http://127.0.0.1:8000",
-    enable_mcp=True,
-    version="2026-01-11"
-)
+app = FastUCP(title="FastUCP Tech Store", base_url="http://127.0.0.1:8000", enable_mcp=True, version="2026-01-11")
 
 # --- SIMPLE DATABASE SIMULATION ---
-SESSIONS = {}
+SESSIONS: dict[str, CheckoutResponse] = {}
+
+PRODUCTS = {
+    "sku_pixel": {
+        "id": "sku_pixel",
+        "title": "Google Pixel 9 Pro",
+        "description": "The latest AI-powered smartphone from Google.",
+        "price": 99900,  # $999.00
+        "image_url": "https://store.google.com/pixel.jpg",
+        "weight": 0.5,
+    },
+    "sku_case": {
+        "id": "sku_case",
+        "title": "Pixel 9 Case - Charcoal",
+        "description": "Durable fabric case for Pixel 9.",
+        "price": 2900,  # $29.00
+        "image_url": "https://store.google.com/case.jpg",
+        "weight": 0.1,
+    },
+    "sku_buds": {
+        "id": "sku_buds",
+        "title": "Pixel Buds Pro 2",
+        "description": "Noise cancelling wireless earbuds.",
+        "price": 19900,  # $199.00
+        "image_url": "https://store.google.com/buds.jpg",
+        "weight": 0.2,
+    },
+}
+
 
 # --- 1. Discovery ---
-@app.discovery("/products/search")
+@app.discovery
 def search_products(query: str = ""):
     """Search products."""
-    results = []
     print(f"🔎 Server: Searching for '{query}'...")
-    for item in PRODUCTS.values():
-        if query.lower() in item["title"].lower():
-            results.append({
-                "id": item["id"],
-                "title": item["title"],
-                "price": item["price"],
-                "image_url": item["image_url"]
-            })
+    results = [
+        {"id": item["id"], "title": item["title"], "price": item["price"], "image_url": item["image_url"]}
+        for item in PRODUCTS.values()
+        if query.lower() in item["title"].lower()
+    ]
     return {"items": results}
 
+
 # --- 2. Create Checkout ---
-@app.checkout("/checkout-sessions")
-def create_session(payload: CheckoutCreateRequest):
+@app.checkout
+def create_session(payload: CheckoutCreateRequest) -> CheckoutResponse:
     # Generate a new Session ID
     session_id = str(uuid.uuid4())
 
@@ -63,7 +82,7 @@ def create_session(payload: CheckoutCreateRequest):
     # Mandatory Links
     builder.links = [
         {"type": "privacy_policy", "url": "https://example.com/privacy"},
-        {"type": "terms_of_service", "url": "https://example.com/terms"}
+        {"type": "terms_of_service", "url": "https://example.com/terms"},
     ]
 
     # Add items
@@ -75,7 +94,7 @@ def create_session(payload: CheckoutCreateRequest):
                 title=product["title"],
                 price=product["price"],
                 quantity=req_item.quantity,
-                img_url=product["image_url"]
+                img_url=product["image_url"],
             )
 
     if payload.buyer:
@@ -89,19 +108,20 @@ def create_session(payload: CheckoutCreateRequest):
 
     return response
 
+
 # --- 3. Update Checkout ---
-@app.update_checkout("/checkout-sessions/{id}")
-def update_session(id: str, payload: CheckoutUpdateRequest):
+@app.update_checkout
+def update_session(session_id: str, payload: CheckoutUpdateRequest) -> CheckoutResponse:
     # We could retrieve old session data, but here we rebuild it using the Builder pattern.
-    # In a real scenario, fetch the current state from SESSIONS[id] and pass it to the builder.
-    builder = CheckoutBuilder(app, session_id=id)
+    # In a real scenario, fetch the current state from SESSIONS[session_id] and pass it to the builder.
+    builder = CheckoutBuilder(app, session_id=session_id)
 
     product = PRODUCTS["sku_pixel"]
     builder.add_item(product["id"], product["title"], product["price"], 1, product["image_url"])
 
     builder.links = [
         {"type": "privacy_policy", "url": "https://example.com/privacy"},
-        {"type": "terms_of_service", "url": "https://example.com/terms"}
+        {"type": "terms_of_service", "url": "https://example.com/terms"},
     ]
 
     builder.set_buyer(payload.buyer)
@@ -114,68 +134,67 @@ def update_session(id: str, payload: CheckoutUpdateRequest):
         builder.add_error("missing", "$.buyer.email", "Email required for shipping.")
 
     response = builder.build()
-    SESSIONS[id] = response # Save updated state
+    SESSIONS[session_id] = response  # Save updated state
     return response
 
 
-@app.complete_checkout("/checkout-sessions/{id}/complete")
-def complete_session(id: str, payment: dict[str, Any]):
+@app.complete_checkout
+def complete_session(session_id: str, payment: dict[str, Any]) -> Order:
     """
     Finalizes the order and returns an Order object.
     """
     print(f"💰 Payment Received: {payment}")
 
     # 1. Session Check
-    checkout_session = SESSIONS.get(id)
+    checkout_session = SESSIONS.get(session_id)
     if not checkout_session:
         # Error can be raised (using UCPError)
-        return {"error": "Session not found"}
+        raise UCPError(code="not_found", message="Checkout session not found.", path="$.id", status_code=404)
 
     # 2. Payment Verification (Mock)
     # In real life, verify 'payment' token with Stripe/Iyzico/etc.
     if not payment.get("token"):
         pass
 
-
-    order_line_items = []
-    for li in checkout_session.line_items:
-        order_line_items.append(
-            OrderLineItem(
-                id=li.id,
-                item=li.item,
-                quantity=Quantity(total=li.quantity, fulfilled=0),
-                totals=li.totals,
-                status="processing"
-            )
+    order_line_items = [
+        OrderLineItem(
+            id=li.id,
+            item=li.item,
+            quantity=Quantity(total=li.quantity, fulfilled=0),
+            totals=li.totals,
+            status="processing",
         )
+        for li in checkout_session.line_items
+    ]
 
     # 4. Create Order Object
     order_id = f"ord_{uuid.uuid4().hex[:8]}"
 
     # Creating UCP Context (Capabilities)
     ucp_context = ResponseOrder(
-        version=Version(root="2026-01-11"),
+        version=app.ucp_version,
         capabilities=[
             # Which capabilities are active post-order
-            Response(name="dev.ucp.shopping.order", version=Version(root="2026-01-11"))
-        ]
+            Capability.ORDER.value.as_response(),
+        ],
     )
 
     order = Order(
         ucp=ucp_context,
         id=order_id,
-        checkout_id=id,
-        permalink_url=f"https://example.com/orders/{order_id}",
+        checkout_id=session_id,
+        permalink_url=HttpsUrl(f"https://example.com/orders/{order_id}"),
         line_items=order_line_items,
         totals=checkout_session.totals,
         fulfillment=Fulfillment(
-            expectations=[], # Fulfillment expectations can be added here
-            events=[]
-        )
+            expectations=[],  # Fulfillment expectations can be added here
+            events=[],
+        ),
     )
 
     print(f"🎉 Order Created: {order_id}")
     return order
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)

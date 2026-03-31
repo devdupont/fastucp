@@ -7,7 +7,6 @@ if TYPE_CHECKING:
 
 
 class Protocol:
-
     def __init__(self, app: "FastUCP") -> None:
         self.app = app
 

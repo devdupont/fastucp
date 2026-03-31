@@ -1,4 +1,7 @@
-# examples/simple_store/agent.py
+"""Happy path for an agent simulation using the FastUCPClient to interact with the server."""
+
+# ruff: noqa: INP001, T201, BLE001
+
 import json
 import time
 
@@ -11,6 +14,7 @@ def print_json(label, data):
     print(json.dumps(data, indent=2))
     print("-" * (len(label) + 8) + "\n")
 
+
 def run_agent_simulation():
     # 1. Initialize Client using MCP Transport
     # We use 'mcp' to see the JSON-RPC wrapping
@@ -20,10 +24,13 @@ def run_agent_simulation():
 
     try:
         # FIX: We must wrap the call in "tools/call" structure for MCP
-        mcp_response = client._send_mcp("tools/call", {
-            "name": "search_products",
-            "arguments": {"query": "Pixel"}
-        })
+        mcp_response = client._send_mcp(  # noqa: SLF001
+            "tools/call",
+            {
+                "name": "search_products",
+                "arguments": {"query": "Pixel"},
+            },
+        )
 
         # FIX: Extract the actual data.
         # The server returns {_raw: {...}, content: [...]}
@@ -48,35 +55,26 @@ def run_agent_simulation():
         return
 
     print("\n🤖 === STEP 2: Create Checkout Session ===")
-    line_items = [
-        {
-            "item": {"id": selected_item["id"]},
-            "quantity": 1
-        }
-    ]
+    line_items = [{"item": {"id": selected_item["id"]}, "quantity": 1}]
 
     # This uses the SDK method (ensure fastucp/client.py is updated to use tools/call)
     checkout_session = client.create_checkout(line_items=line_items)
     session_id = checkout_session.id
 
-    print_json("Checkout Created (Response)", checkout_session.model_dump(mode='json', exclude_none=True))
+    print_json("Checkout Created (Response)", checkout_session.model_dump(mode="json", exclude_none=True))
     print(f"✅ Session ID: {session_id}")
 
     # Simulate user thinking time
     time.sleep(1)
 
     print("\n🤖 === STEP 3: Update Buyer Info (Trigger Shipping Calc) ===")
-    buyer_info = {
-        "email": "agent@example.com",
-        "first_name": "Agent",
-        "last_name": "Smith"
-    }
+    buyer_info = {"email": "agent@example.com", "first_name": "Agent", "last_name": "Smith"}
 
     # Send update request
     updated_session = client.update_checkout(session_id, buyer_data=buyer_info)
 
     # Inspect the JSON to see Shipping Options returned by the builder
-    dump = updated_session.model_dump(mode='json', exclude_none=True)
+    dump = updated_session.model_dump(mode="json", exclude_none=True)
     print_json("Updated Session (With Shipping)", dump)
 
     # Extract shipping options safely
@@ -95,14 +93,12 @@ def run_agent_simulation():
 
     print("\n🤖 === STEP 4: Complete Order ===")
     # Fake payment token
-    payment_data = {
-        "token": "tok_visa_fake",
-        "type": "tokenized_card"
-    }
+    payment_data = {"token": "tok_visa_fake", "type": "tokenized_card"}
 
     order = client.complete_checkout(session_id, payment_data)
-    print_json("Order Confirmation", order.model_dump(mode='json', exclude_none=True))
+    print_json("Order Confirmation", order.model_dump(mode="json", exclude_none=True))
     print("🎉 Purchase Complete!")
+
 
 if __name__ == "__main__":
     # Ensure server is running first!
