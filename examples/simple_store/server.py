@@ -25,7 +25,7 @@ from fastucp.types import (
 logging.basicConfig(level=logging.INFO)
 
 
-app = FastUCP(title="FastUCP Tech Store", base_url="http://127.0.0.1:8000", enable_mcp=True, version="2026-01-11")
+app = FastUCP(title="FastUCP Tech Store", base_url="http://127.0.0.1:8000", enable_mcp=True)
 
 # --- SIMPLE DATABASE SIMULATION ---
 SESSIONS: dict[str, CheckoutResponse] = {}

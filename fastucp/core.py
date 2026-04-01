@@ -15,7 +15,6 @@ from ucp_sdk.models._internal import (
     Rest,
     Services,
     UcpService,
-    Version,
 )
 from ucp_sdk.models.discovery.profile_schema import Payment, UcpDiscoveryProfile
 from ucp_sdk.models.schemas.shopping.types.message import Message
@@ -27,6 +26,7 @@ from fastucp.exceptions import UCPError
 from fastucp.presets import Capability
 from fastucp.protocols.a2a import A2AProtocol
 from fastucp.security import UCPSigningMiddleware
+from fastucp.version import UCP_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -37,38 +37,51 @@ class FastUCP(FastAPI):
     Automatically handles /.well-known/ucp discovery and protocol routing.
     """
 
+    ucp_base_url: str
+    ucp_version = UCP_VERSION
+
+    enable_a2a: bool
+    enable_mcp: bool
+    signing_key: str | None
+
+    capabilities: set[Capability]
+    payment_handlers: list[PaymentHandlerResponse]
+
+    _handlers: dict[str, Callable[..., BaseModel | dict]]
+    _services: dict[str, UcpService]
+
+
+
     def __init__(
         self,
         base_url: str,
         *,
         title: str = "FastUCP Merchant",
-        version: str = "2026-01-11",
+        version: str = "0.1.0",
         enable_mcp: bool = False,
         enable_a2a: bool = False,
         signing_key: str | None = None,
         **kwargs: Any,
     ):
-        self._print_banner(version)
-        super().__init__(title=title, **kwargs)
+        self._print_banner(title, version)
+        super().__init__(title=title, version=version, **kwargs)
 
-        self.ucp_base_url = base_url.rstrip("/")
-        self.ucp_version_str = version
-        self.ucp_version = Version(root=version)
+        self.base_url = base_url.rstrip("/")
 
         self.enable_mcp = enable_mcp
         self.enable_a2a = enable_a2a
 
-        self.capabilities: list[Capability] = []
-        self.payment_handlers: list[PaymentHandlerResponse] = []
-        self._handlers: dict[str, Callable[..., BaseModel | dict]] = {}
+        self.capabilities = set()
+        self.payment_handlers = []
+        self._handlers = {}
 
         self._services = {
             "dev.ucp.shopping": UcpService(
-                version=self.ucp_version,
-                spec=AnyUrl(f"https://ucp.dev/{self.ucp_version_str}/specification/overview"),
+                version=UCP_VERSION,
+                spec=AnyUrl(f"https://ucp.dev/{UCP_VERSION.root}/specification/overview"),
                 rest=Rest(
-                    schema=AnyUrl(f"https://ucp.dev/{self.ucp_version_str}/services/shopping/openapi.json"),
-                    endpoint=AnyUrl(self.ucp_base_url),
+                    schema=AnyUrl(f"https://ucp.dev/{UCP_VERSION.root}/services/shopping/openapi.json"),
+                    endpoint=AnyUrl(self.base_url),
                 ),
             )
         }
@@ -89,7 +102,7 @@ class FastUCP(FastAPI):
             self.mcp_protocol = MCPProtocol(self)
 
             self.add_api_route("/mcp", self.mcp_protocol.handle_request, methods=["POST"], tags=["UCP Protocol: MCP"])
-            log.info("🤖 MCP Server Ready at: %s/mcp", self.ucp_base_url)
+            log.info("🤖 MCP Server Ready at: %s/mcp", self.base_url)
 
         if self.enable_a2a:
             self.a2a_protocol = A2AProtocol(self)
@@ -108,7 +121,8 @@ class FastUCP(FastAPI):
             self.add_middleware(UCPSigningMiddleware, private_key_json=signing_key)
             log.info("🔒 Response Signing Enabled (JWS)")
 
-    def _print_banner(self, version: str) -> None:
+    @staticmethod
+    def _print_banner(title: str, version: str) -> None:
         cyan = "\033[96m"
         green = "\033[92m"
         bold = "\033[1m"
@@ -127,8 +141,11 @@ class FastUCP(FastAPI):
 
         {reset}
 
-        {green}⚡️ FastUCP v{_fastucp_version}
-        🛍️  Universal Commerce Protocol v{version}{reset}
+        {green}
+        🤖 {title} v{version}
+        ⚡️ FastUCP v{_fastucp_version}
+        🛍️  Universal Commerce Protocol v{UCP_VERSION.root}
+        {reset}
         """
 
         log.info(banner)
@@ -146,9 +163,7 @@ class FastUCP(FastAPI):
         self.payment_handlers.append(handler)
 
     def _register_capability(self, capability: Capability) -> None:
-        if capability in self.capabilities:
-            return
-        self.capabilities.append(capability)
+        self.capabilities.add(capability)
 
     @overload
     def _create_ucp_context(self, context_type: Literal["checkout"]) -> ResponseCheckout:
@@ -161,8 +176,8 @@ class FastUCP(FastAPI):
     def _create_ucp_context(self, context_type: str = "checkout") -> ResponseCheckout | ResponseOrder:
         active_caps = [c.value.as_response() for c in self.capabilities]
         if context_type == "order":
-            return ResponseOrder(version=self.ucp_version, capabilities=active_caps)
-        return ResponseCheckout(version=self.ucp_version, capabilities=active_caps)
+            return ResponseOrder(version=UCP_VERSION, capabilities=active_caps)
+        return ResponseCheckout(version=UCP_VERSION, capabilities=active_caps)
 
     def _handle_manifest(self) -> UcpDiscoveryProfile:
         shopping_service = self._services["dev.ucp.shopping"]
@@ -170,7 +185,7 @@ class FastUCP(FastAPI):
         # Manifest update logic
         if self.enable_mcp:
             shopping_service.mcp = Mcp(
-                schema=AnyUrl(f"https://ucp.dev/{self.ucp_version_str}/services/shopping/mcp.openrpc.json"),
+                schema=AnyUrl(f"https://ucp.dev/{UCP_VERSION.root}/services/shopping/mcp.openrpc.json"),
                 # Critical: Writing our /mcp address to the Discovery file
                 endpoint=AnyUrl(f"{self.ucp_base_url}/mcp"),
             )
@@ -181,7 +196,7 @@ class FastUCP(FastAPI):
 
         return UcpDiscoveryProfile(
             ucp=DiscoveryProfile(
-                version=self.ucp_version, services=Services(root=self._services), capabilities=capabilities
+                version=UCP_VERSION, services=Services(root=self._services), capabilities=capabilities
             ),
             payment=Payment(handlers=self.payment_handlers) if self.payment_handlers else None,
         )
