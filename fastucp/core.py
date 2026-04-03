@@ -5,30 +5,23 @@ from typing import Any, Literal, get_type_hints, overload
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import AnyUrl, BaseModel
-from ucp_sdk.models._internal import (
-    A2a,
-    DiscoveryProfile,
-    Mcp,
-    ResponseCheckout,
-    ResponseOrder,
-    Rest,
-    Services,
-    UcpService,
-)
-from ucp_sdk.models.discovery.profile_schema import Payment, UcpDiscoveryProfile
+from pydantic import BaseModel
 from ucp_sdk.models.schemas.shopping.types.message import Message
 from ucp_sdk.models.schemas.shopping.types.message_error import MessageError
-from ucp_sdk.models.schemas.shopping.types.payment_handler_resp import PaymentHandlerResponse
+from ucp_sdk.models.schemas.ucp import Base as UcpDiscoveryProfile
+from ucp_sdk.models.schemas.ucp import ResponseCheckoutSchema, ResponseOrderSchema, ReverseDomainName
 
+from fastucp import presets
 from fastucp.__about__ import __version__ as _fastucp_version
 from fastucp.exceptions import UCPError
-from fastucp.presets import Capability
-from fastucp.protocols.a2a import A2AProtocol
 from fastucp.security import UCPSigningMiddleware
+from fastucp.service import Service, make_service
 from fastucp.version import UCP_VERSION
 
 log = logging.getLogger(__name__)
+
+
+SHOPPING_SERVICE_KEY = ReverseDomainName("dev.ucp.shopping")
 
 
 class FastUCP(FastAPI):
@@ -44,13 +37,11 @@ class FastUCP(FastAPI):
     enable_mcp: bool
     signing_key: str | None
 
-    capabilities: set[Capability]
-    payment_handlers: list[PaymentHandlerResponse]
+    capabilities: set[presets.Capability]
+    payment_handlers: list[presets.Payment]
 
     _handlers: dict[str, Callable[..., BaseModel | dict]]
-    _services: dict[str, UcpService]
-
-
+    _services: dict[ReverseDomainName, list[Service]]
 
     def __init__(
         self,
@@ -74,17 +65,9 @@ class FastUCP(FastAPI):
         self.capabilities = set()
         self.payment_handlers = []
         self._handlers = {}
+        self._services = {}
 
-        self._services = {
-            "dev.ucp.shopping": UcpService(
-                version=UCP_VERSION,
-                spec=AnyUrl(f"https://ucp.dev/{UCP_VERSION.root}/specification/overview"),
-                rest=Rest(
-                    schema=AnyUrl(f"https://ucp.dev/{UCP_VERSION.root}/services/shopping/openapi.json"),
-                    endpoint=AnyUrl(self.base_url),
-                ),
-            )
-        }
+        self._add_shopping_service("rest", "")
 
         self.add_api_route(
             "/.well-known/ucp",
@@ -99,23 +82,32 @@ class FastUCP(FastAPI):
         if self.enable_mcp:
             from fastucp.protocols.mcp import MCPProtocol
 
+            mcp_route = "/mcp"
+            self._add_shopping_service("mcp", mcp_route)
             self.mcp_protocol = MCPProtocol(self)
 
-            self.add_api_route("/mcp", self.mcp_protocol.handle_request, methods=["POST"], tags=["UCP Protocol: MCP"])
-            log.info("🤖 MCP Server Ready at: %s/mcp", self.base_url)
+            self.add_api_route(
+                mcp_route, self.mcp_protocol.handle_request, methods=["POST"], tags=["UCP Protocol: MCP"]
+            )
+            log.info("🤖 MCP Server Ready at: %s%s", self.base_url, mcp_route)
 
         if self.enable_a2a:
+            from fastucp.protocols.a2a import A2AProtocol
+
+            a2a_route = "/.well-known/agent-card.json"
+            self._add_shopping_service("a2a", a2a_route)
             self.a2a_protocol = A2AProtocol(self)
             self.add_api_route(
-                "/.well-known/agent-card.json",
+                a2a_route,
                 self.a2a_protocol.handle_agent_card,
                 methods=["GET"],
                 tags=["UCP Protocol: A2A"],
             )
+            agent_message_route = "/agent/message"
             self.add_api_route(
-                "/agent/message", self.a2a_protocol.handle_message, methods=["POST"], tags=["UCP Protocol: A2A"]
+                agent_message_route, self.a2a_protocol.handle_message, methods=["POST"], tags=["UCP Protocol: A2A"]
             )
-            log.info("✅ A2A Protocol Enabled (/agent/message)")
+            log.info("✅ A2A Protocol Enabled (%s)", agent_message_route)
 
         if signing_key:
             self.add_middleware(UCPSigningMiddleware, private_key_json=signing_key)
@@ -159,51 +151,47 @@ class FastUCP(FastAPI):
             content={"messages": [error_payload.model_dump(exclude_none=True, mode="json")]},
         )
 
-    def add_payment_handler(self, handler: PaymentHandlerResponse) -> None:
+    def _add_shopping_service(
+        self, name: Literal["rest", "mcp", "a2a", "embedded"], endpoint: str | None = None
+    ) -> None:
+        if SHOPPING_SERVICE_KEY not in self._services:
+            self._services[SHOPPING_SERVICE_KEY] = []
+        if endpoint is not None:
+            endpoint = f"{self.base_url}/{endpoint.lstrip('/')}"
+        service = make_service(name, endpoint=endpoint)
+        self._services[SHOPPING_SERVICE_KEY].append(service)
+
+    def add_payment_handler(self, handler: presets.Payment) -> None:
         self.payment_handlers.append(handler)
 
-    def _register_capability(self, capability: Capability) -> None:
+    def _register_capability(self, capability: presets.Capability) -> None:
         self.capabilities.add(capability)
 
     @overload
-    def _create_ucp_context(self, context_type: Literal["checkout"]) -> ResponseCheckout:
+    def _create_ucp_context(self, context_type: Literal["checkout"]) -> ResponseCheckoutSchema:
         ...
 
     @overload
-    def _create_ucp_context(self, context_type: Literal["order"]) -> ResponseOrder:
+    def _create_ucp_context(self, context_type: Literal["order"]) -> ResponseOrderSchema:
         ...
 
-    def _create_ucp_context(self, context_type: str = "checkout") -> ResponseCheckout | ResponseOrder:
-        active_caps = [c.value.as_response() for c in self.capabilities]
+    def _create_ucp_context(self, context_type: str = "checkout") -> ResponseCheckoutSchema | ResponseOrderSchema:
+        active_caps = {c.name: [c.as_response()] for c in self.capabilities}
         if context_type == "order":
-            return ResponseOrder(version=UCP_VERSION, capabilities=active_caps)
-        return ResponseCheckout(version=UCP_VERSION, capabilities=active_caps)
+            return ResponseOrderSchema(version=UCP_VERSION, capabilities=active_caps)
+        return ResponseCheckoutSchema(version=UCP_VERSION, capabilities=active_caps)
 
     def _handle_manifest(self) -> UcpDiscoveryProfile:
-        shopping_service = self._services["dev.ucp.shopping"]
-
-        # Manifest update logic
-        if self.enable_mcp:
-            shopping_service.mcp = Mcp(
-                schema=AnyUrl(f"https://ucp.dev/{UCP_VERSION.root}/services/shopping/mcp.openrpc.json"),
-                # Critical: Writing our /mcp address to the Discovery file
-                endpoint=AnyUrl(f"{self.ucp_base_url}/mcp"),
-            )
-        if self.enable_a2a:
-            shopping_service.a2a = A2a(endpoint=AnyUrl(f"{self.ucp_base_url}/.well-known/agent-card.json"))
-
-        capabilities = [c.value.as_discovery() for c in self.capabilities]
-
         return UcpDiscoveryProfile(
-            ucp=DiscoveryProfile(
-                version=UCP_VERSION, services=Services(root=self._services), capabilities=capabilities
-            ),
-            payment=Payment(handlers=self.payment_handlers) if self.payment_handlers else None,
+            version=UCP_VERSION,
+            services=self._services,
+            capabilities={c.name: [c] for c in self.capabilities},
+            payment_handlers={p.name: [p] for p in self.payment_handlers},
         )
 
     # --- Decorators ---
     def checkout(self, func: Callable | None = None, /, *, path: str = "/checkout-sessions") -> Callable:
-        self._register_capability(Capability.DISCOVERY)
+        self._register_capability(presets.DISCOVERY)
 
         def decorator(func: Callable) -> Callable:
             self.add_api_route(path, func, methods=["POST"], response_model_exclude_none=True, tags=["UCP Shopping"])
@@ -229,7 +217,7 @@ class FastUCP(FastAPI):
     def complete_checkout(
         self, func: Callable | None = None, /, *, path: str = "/checkout-sessions/{id}/complete"
     ) -> Callable:
-        self._register_capability(Capability.ORDER)
+        self._register_capability(presets.ORDER)
 
         def decorator(func: Callable) -> Callable:
             self.add_api_route(path, func, methods=["POST"], response_model_exclude_none=True, tags=["UCP Shopping"])
@@ -297,7 +285,7 @@ class FastUCP(FastAPI):
         Decorator recording Discovery capabilities such as product search.
         """
 
-        self._register_capability(Capability.DISCOVERY)
+        self._register_capability(presets.DISCOVERY)
 
         def decorator(func: Callable) -> Callable:
             self.add_api_route(path, func, methods=["POST"], response_model_exclude_none=True, tags=["UCP Discovery"])

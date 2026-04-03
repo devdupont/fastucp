@@ -24,7 +24,7 @@ dependencies = [
     "pydantic>=2.5.0",      
     "requests>=2.30.0",
     "jwcrypto==1.5.6",
-    "ucp-sdk==0.1.0",
+    "ucp-sdk==0.3.0",
 ]
 
 [project.urls]
